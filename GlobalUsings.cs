@@ -1,0 +1,10 @@
+global using System.Globalization;
+global using System.Reflection;
+global using Messaging.Abstractions;
+global using Messaging.Options;
+global using Microsoft.Extensions.DependencyInjection;
+global using Microsoft.Extensions.Logging;
+global using Microsoft.Extensions.Options;
+global using NATS.Client.Core;
+global using NATS.Client.JetStream;
+global using NATS.Client.JetStream.Models;
