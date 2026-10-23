@@ -69,8 +69,9 @@ internal sealed class SubscriptionManager(
         }
 
         INatsJSConsumer consumer = await provisioner.BindAsync(subjects, cancellationToken);
+        NatsJSConsumeOpts consumeOptions = new() { MaxMsgs = _options.PrefetchCount };
 
-        await foreach (INatsJSMsg<byte[]> message in consumer.ConsumeAsync<byte[]>(cancellationToken: cancellationToken))
+        await foreach (INatsJSMsg<byte[]> message in consumer.ConsumeAsync<byte[]>(opts: consumeOptions, cancellationToken: cancellationToken))
         {
             await dispatcher.DispatchAsync(message, cancellationToken);
         }

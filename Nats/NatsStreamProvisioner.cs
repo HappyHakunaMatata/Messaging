@@ -18,20 +18,17 @@ internal sealed class NatsStreamProvisioner(
             },
             cancellationToken);
 
-        INatsJSConsumer consumer = await context.CreateOrUpdateConsumerAsync(
+        return await context.CreateOrUpdateConsumerAsync(
             _options.QualifiedStreamName,
             new ConsumerConfig
             {
                 Name = _options.QualifiedDurableName,
                 DurableName = _options.QualifiedDurableName,
                 AckPolicy = ConsumerConfigAckPolicy.Explicit,
+                AckWait = _options.AckWait,
                 MaxDeliver = _options.MaxDeliver,
-                Backoff = _options.Backoff.Length == 0 ? null : _options.Backoff,
                 FilterSubjects = [.. subjects]
             },
             cancellationToken);
-
-  
-        return consumer;
     }
 }

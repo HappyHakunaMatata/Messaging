@@ -6,11 +6,11 @@ public sealed class ConsumerOptions : IValidatableObject
 {
     private const string NameSeparator = "_";
 
-    public const string DefaultStreamName = "PROJECT_CONSUMERS";
-
-    public const string DefaultDurableName = "project-consumers";
-
     public const int DefaultMaxDeliver = 5;
+
+    public const int DefaultAckWaitSeconds = 30;
+
+    public const int DefaultPrefetchCount = 10;
 
     public const int DefaultReconnectDelaySeconds = 10;
 
@@ -21,17 +21,23 @@ public sealed class ConsumerOptions : IValidatableObject
     public static int[] DefaultBackoffSeconds => [1, 5, 30, 120];
 
     [Required(AllowEmptyStrings = false)]
-    public string StreamName { get; set; } = DefaultStreamName;
+    public string StreamName { get; set; } = string.Empty;
 
     [Required(AllowEmptyStrings = false)]
-    public string DurableName { get; set; } = DefaultDurableName;
+    public string DurableName { get; set; } = string.Empty;
 
     public string Prefix { get; set; } = string.Empty;
 
     [Range(1, int.MaxValue)]
     public int MaxDeliver { get; set; } = DefaultMaxDeliver;
 
+    [Range(1, int.MaxValue)]
+    public int AckWaitSeconds { get; set; } = DefaultAckWaitSeconds;
+
     public int[] BackoffSeconds { get; set; } = [];
+
+    [Range(1, int.MaxValue)]
+    public int PrefetchCount { get; set; } = DefaultPrefetchCount;
 
     [Range(1, int.MaxValue)]
     public int ReconnectDelaySeconds { get; set; } = DefaultReconnectDelaySeconds;
@@ -40,14 +46,6 @@ public sealed class ConsumerOptions : IValidatableObject
 
     public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
     {
-        if (MaxDeliver <= EffectiveBackoffSeconds.Length)
-        {
-            yield return new ValidationResult(
-                $"{nameof(MaxDeliver)} ({MaxDeliver}) must be greater than the number of {nameof(BackoffSeconds)} entries ({EffectiveBackoffSeconds.Length}). " +
-                "JetStream refuses to create a consumer whose backoff list is not shorter than its delivery limit.",
-                [nameof(MaxDeliver), nameof(BackoffSeconds)]);
-        }
-
         if (EffectiveBackoffSeconds.Any(seconds => seconds <= 0))
         {
             yield return new ValidationResult(
@@ -56,13 +54,25 @@ public sealed class ConsumerOptions : IValidatableObject
         }
     }
 
-    internal int[] EffectiveBackoffSeconds => MaxDeliver == 1 ? [] : BackoffSeconds.Length == 0 ? DefaultBackoffSeconds : BackoffSeconds;
+    internal static string DefaultStreamName(string applicationName) => ToName(applicationName).ToUpperInvariant();
 
-    internal TimeSpan[] Backoff => [.. EffectiveBackoffSeconds.Select(seconds => TimeSpan.FromSeconds(seconds))];
+    internal static string DefaultDurableName(string applicationName) => ToName(applicationName).ToLowerInvariant();
+
+    internal int[] EffectiveBackoffSeconds => BackoffSeconds.Length == 0 ? DefaultBackoffSeconds : BackoffSeconds;
+
+    internal TimeSpan AckWait => TimeSpan.FromSeconds(AckWaitSeconds);
 
     internal TimeSpan DuplicateWindow => TimeSpan.FromMinutes(DuplicateWindowMinutes);
 
     internal TimeSpan ReconnectDelay => TimeSpan.FromSeconds(ReconnectDelaySeconds);
+
+    internal TimeSpan RedeliveryDelay(ulong numDelivered)
+    {
+        int[] backoff = EffectiveBackoffSeconds;
+        int index = (int)Math.Min(Math.Max(numDelivered, 1) - 1, (ulong)(backoff.Length - 1));
+
+        return TimeSpan.FromSeconds(backoff[index]);
+    }
 
     internal string QualifiedStreamName => ToName(string.Concat(Prefix, StreamName));
 

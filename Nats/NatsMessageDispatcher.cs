@@ -21,14 +21,26 @@ internal sealed class NatsMessageDispatcher(
         if (!descriptorProvider.Router.TryMatch(subject, action, out NatsEndpoint? endpoint))
         {
             logger.LogWarning("message_unroutable subject={Subject} action={Action}", subject, action);
-            await message.AckAsync(cancellationToken: cancellationToken);
+            await AcknowledgeAsync(message);
             return;
         }
 
         try
         {
             await InvokeAsync(endpoint, subject, headers, message, cancellationToken);
-            await message.AckAsync(cancellationToken: cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            logger.LogInformation(
+                "message_cancelled subject={Subject} handler={Handler} num_delivered={NumDelivered}",
+                message.Subject,
+                endpoint.DisplayName,
+                message.Metadata?.NumDelivered);
+
+            // Not immediate: an immediate NAK is redelivered into this instance's own pull request before its UNSUB
+            // is processed, and that copy is dropped with the subscription. The first backoff step is enough.
+            await RedeliverAsync(message, _options.RedeliveryDelay(1));
+            return;
         }
         catch (NatsMessageRejectedException rejection)
         {
@@ -39,12 +51,16 @@ internal sealed class NatsMessageDispatcher(
                 endpoint.DisplayName,
                 rejection.GetType().Name);
 
-            await TerminateAsync(message, cancellationToken);
+            await TerminateAsync(message);
+            return;
         }
         catch (Exception exception)
         {
-            await FailAsync(message, endpoint, exception, cancellationToken);
+            await FailAsync(message, endpoint, exception);
+            return;
         }
+
+        await AcknowledgeAsync(message);
     }
 
     private async Task InvokeAsync(
@@ -70,24 +86,24 @@ internal sealed class NatsMessageDispatcher(
         await NatsActionInvokerFactory.CreateInvoker(context, endpoint).InvokeAsync();
     }
 
-    private async Task FailAsync(
-        INatsJSMsg<byte[]> message,
-        NatsEndpoint endpoint,
-        Exception exception,
-        CancellationToken cancellationToken)
+    private async Task FailAsync(INatsJSMsg<byte[]> message, NatsEndpoint endpoint, Exception exception)
     {
         NatsJSMsgMetadata? metadata = message.Metadata;
 
         if (metadata is null || metadata.Value.NumDelivered < (ulong)_options.MaxDeliver)
         {
+            TimeSpan delay = _options.RedeliveryDelay(metadata?.NumDelivered ?? 1);
+
             logger.LogError(
                 exception,
-                "message_failed subject={Subject} handler={Handler} num_delivered={NumDelivered} error={ErrorType}",
+                "message_failed subject={Subject} handler={Handler} num_delivered={NumDelivered} redelivery_delay={RedeliveryDelay} error={ErrorType}",
                 message.Subject,
                 endpoint.DisplayName,
                 metadata?.NumDelivered,
+                delay,
                 exception.GetType().Name);
 
+            await RedeliverAsync(message, delay);
             return;
         }
 
@@ -100,14 +116,42 @@ internal sealed class NatsMessageDispatcher(
             _options.MaxDeliver,
             exception.GetType().Name);
 
-        await TerminateAsync(message, cancellationToken);
+        await TerminateAsync(message);
     }
 
-    private async Task TerminateAsync(INatsJSMsg<byte[]> message, CancellationToken cancellationToken)
+    // Acknowledgements deliberately ignore the stop token: once the handler has finished, the ack has to reach
+    // the server even during shutdown, otherwise the message comes back and is processed a second time.
+    private async Task AcknowledgeAsync(INatsJSMsg<byte[]> message)
     {
         try
         {
-            await message.AckTerminateAsync(cancellationToken: cancellationToken);
+            await message.AckAsync(cancellationToken: CancellationToken.None);
+        }
+        catch (Exception failure)
+        {
+            logger.LogWarning(failure, "message_ack_failed subject={Subject}", message.Subject);
+        }
+    }
+
+    private async Task RedeliverAsync(INatsJSMsg<byte[]> message, TimeSpan delay)
+    {
+        try
+        {
+            await message.NakAsync(
+                new AckOpts { NakDelay = delay > TimeSpan.Zero ? delay : null },
+                CancellationToken.None);
+        }
+        catch (Exception failure)
+        {
+            logger.LogWarning(failure, "message_nak_failed subject={Subject}", message.Subject);
+        }
+    }
+
+    private async Task TerminateAsync(INatsJSMsg<byte[]> message)
+    {
+        try
+        {
+            await message.AckTerminateAsync(cancellationToken: CancellationToken.None);
         }
         catch (Exception failure)
         {

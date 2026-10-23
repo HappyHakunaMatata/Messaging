@@ -1,4 +1,3 @@
-using System.Security.Cryptography;
 using System.Text.Json;
 
 namespace Messaging.Nats;
@@ -6,7 +5,8 @@ namespace Messaging.Nats;
 public sealed class NatsManager(
     INatsConnectionProvider connection,
     IOptions<NatsOptions> natsOptions,
-    IOptions<ConsumerOptions> consumerOptions) : IPublisher
+    IOptions<ConsumerOptions> consumerOptions,
+    ILogger<NatsManager> logger) : IPublisher
 {
     private readonly JsonSerializerOptions _serializerOptions = natsOptions.Value.SerializerOptions;
     private readonly ConsumerOptions _consumerOptions = consumerOptions.Value;
@@ -20,17 +20,45 @@ public sealed class NatsManager(
         ArgumentException.ThrowIfNullOrWhiteSpace(subject);
 
         byte[] data = JsonSerializer.SerializeToUtf8Bytes(payload, _serializerOptions);
-        string messageId = Convert.ToHexString(SHA256.HashData(data));
         string wireSubject = _consumerOptions.QualifySubject(subject);
+        string? messageId = GetMessageId(headers);
 
         PubAckResponse acknowledgement = await connection.Context.PublishAsync(
             wireSubject,
             data,
             headers: ToHeaders(headers),
-            opts: new NatsJSPubOpts { MsgId = messageId },
+            opts: messageId is null ? null : new NatsJSPubOpts { MsgId = messageId },
             cancellationToken: cancellationToken);
 
-        if (acknowledgement.Duplicate) return;
+        if (acknowledgement.Duplicate)
+        {
+            logger.LogInformation(
+                "message_duplicate_ignored subject={Subject} message_id={MessageId}",
+                wireSubject,
+                messageId);
+
+            return;
+        }
+
+        acknowledgement.EnsureSuccess();
+    }
+
+    private static string? GetMessageId(IReadOnlyDictionary<string, string>? headers)
+    {
+        if (headers is null || headers.Count == 0)
+        {
+            return null;
+        }
+
+        foreach (KeyValuePair<string, string> header in headers)
+        {
+            if (string.Equals(header.Key, NatsHeaderNames.MessageId, StringComparison.OrdinalIgnoreCase))
+            {
+                return string.IsNullOrWhiteSpace(header.Value) ? null : header.Value;
+            }
+        }
+
+        return null;
     }
 
     private static NatsHeaders? ToHeaders(IReadOnlyDictionary<string, string>? headers)

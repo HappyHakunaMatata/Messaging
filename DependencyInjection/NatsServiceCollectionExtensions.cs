@@ -25,6 +25,7 @@ public static class NatsServiceCollectionExtensions
                 .ValidateDataAnnotations()
                 .ValidateOnStart();
 
+            services.TryAddEnumerable(ServiceDescriptor.Singleton<IPostConfigureOptions<ConsumerOptions>, ConsumerOptionsSetup>());
             services.TryAddSingleton<INatsConnectionProvider, NatsConnectionProvider>();
             services.TryAddSingleton<IPublisher, NatsManager>();
 

@@ -60,6 +60,11 @@ internal sealed class AssemblyActionDescriptorProvider(
             }
 
             string displayName = $"{handlerType.FullName}.{method.Name}";
+
+            EnsureLiteral(displayName, nameof(SubjectAttribute), classSubject);
+            EnsureLiteral(displayName, nameof(SubjectAttribute), methodSubject);
+            EnsureLiteral(displayName, nameof(ActionAttribute), action);
+
             HandlerSignature signature = HandlerSignature.Describe(displayName, method, isService);
 
             descriptors.Add(new NatsActionDescriptor
@@ -91,5 +96,15 @@ internal sealed class AssemblyActionDescriptorProvider(
         }
 
         return NatsSubjects.Compose(classSubject, action!);
+    }
+
+    private static void EnsureLiteral(string displayName, string attribute, string? value)
+    {
+        if (value is not null && !NatsSubjects.IsLiteral(value))
+        {
+            throw new InvalidOperationException(
+                $"Handler '{displayName}' declares [{attribute}(\"{value}\")], which is not a literal subject. " +
+                "Handlers are matched by exact subject, so wildcards ('*', '>'), empty tokens and whitespace are not supported.");
+        }
     }
 }

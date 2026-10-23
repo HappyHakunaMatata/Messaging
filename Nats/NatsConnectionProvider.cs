@@ -16,7 +16,7 @@ internal sealed class NatsConnectionProvider(IOptions<NatsOptions> options) : IN
         {
             lock (_gate)
             {
-                _client ??= new NatsClient(_options.Url);
+                _client ??= new NatsClient(new NatsOpts { Url = _options.Url, DrainSubscriptionsOnDispose = true });
                 return _context ??= _client.CreateJetStreamContext();
             }
         }
