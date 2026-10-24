@@ -12,13 +12,28 @@ internal sealed class SubscriptionManager(
 {
     private readonly ConsumerOptions _options = options.Value;
 
+    private string[] _subjects = [];
+
+    public override Task StartAsync(CancellationToken cancellationToken)
+    {
+        _subjects = [.. descriptorProvider.Router.Subjects.Select(_options.QualifySubject)];
+
+        return base.StartAsync(cancellationToken);
+    }
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        if (_subjects.Length == 0)
+        {
+            logger.LogWarning("subscription_no_routes");
+            return;
+        }
+
         while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
-                await SubscribeAsync(stoppingToken);
+                await SubscribeAsync(_subjects, stoppingToken);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -40,17 +55,8 @@ internal sealed class SubscriptionManager(
         }
     }
 
-    private async Task SubscribeAsync(CancellationToken cancellationToken)
+    private async Task SubscribeAsync(string[] subjects, CancellationToken cancellationToken)
     {
-        EndpointRouter router = descriptorProvider.Router;
-        string[] subjects = [.. router.Subjects.Select(_options.QualifySubject)];
-
-        if (subjects.Length == 0)
-        {
-            logger.LogWarning("subscription_no_routes");
-            return;
-        }
-
         INatsJSConsumer consumer = await provisioner.BindAsync(subjects, cancellationToken);
         NatsJSConsumeOpts consumeOptions = new() { MaxMsgs = _options.PrefetchCount };
 

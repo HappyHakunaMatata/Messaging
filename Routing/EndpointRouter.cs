@@ -14,11 +14,6 @@ internal sealed class EndpointRouter(
 
     public bool TryMatch(string subject, string? action, [NotNullWhen(true)] out NatsEndpoint? endpoint)
     {
-        if (bySubject.TryGetValue(subject, out endpoint))
-        {
-            return true;
-        }
-
         if (!string.IsNullOrEmpty(action) &&
             byClassSubject.TryGetValue(subject, out FrozenDictionary<string, NatsEndpoint>? actions) &&
             actions.TryGetValue(action, out endpoint))
@@ -26,7 +21,6 @@ internal sealed class EndpointRouter(
             return true;
         }
 
-        endpoint = null;
-        return false;
+        return bySubject.TryGetValue(subject, out endpoint);
     }
 }

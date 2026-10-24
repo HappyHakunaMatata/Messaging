@@ -44,47 +44,44 @@ internal sealed class EndpointRouterFactory(NatsEndpointFactory endpointFactory)
             actions.Add(descriptor.Action, endpoint);
         }
 
-        string[] classSubjects = [.. byClassSubject.Keys];
-        string[] routedSubjects = [.. bySubject.Keys];
-
-        List<string> subjects = new((classSubjects.Length * 2) + routedSubjects.Length);
-
-        for (int index = 0; index < classSubjects.Length; index++)
-        {
-            subjects.Add(classSubjects[index]);
-            subjects.Add(string.Concat(classSubjects[index], NatsSubjects.Separator, NatsSubjects.Wildcard));
-        }
-
-        for (int index = 0; index < routedSubjects.Length; index++)
-        {
-            string subject = routedSubjects[index];
-
-            if (!subjects.Contains(subject) && !IsCoveredByClassSubject(subject, classSubjects))
-            {
-                subjects.Add(subject);
-            }
-        }
-
         return new EndpointRouter(
             bySubject.ToFrozenDictionary(StringComparer.Ordinal),
             byClassSubject.ToFrozenDictionary(
                 entry => entry.Key,
                 entry => entry.Value.ToFrozenDictionary(StringComparer.Ordinal),
                 StringComparer.Ordinal),
-            subjects);
+            CollectSubjects([.. byClassSubject.Keys], [.. bySubject.Keys]));
     }
 
-    private static bool IsCoveredByClassSubject(string subject, string[] classSubjects)
+    private static string[] CollectSubjects(string[] classSubjects, string[] routedSubjects)
     {
+        List<string> candidates = new((classSubjects.Length * 2) + routedSubjects.Length);
+
         for (int index = 0; index < classSubjects.Length; index++)
         {
-            if (subject.StartsWith(string.Concat(classSubjects[index], NatsSubjects.Separator), StringComparison.Ordinal))
+            candidates.Add(classSubjects[index]);
+            candidates.Add(string.Concat(classSubjects[index], NatsSubjects.Separator, NatsSubjects.Wildcard));
+        }
+
+        for (int index = 0; index < routedSubjects.Length; index++)
+        {
+            if (!candidates.Contains(routedSubjects[index]))
             {
-                return true;
+                candidates.Add(routedSubjects[index]);
             }
         }
 
-        return false;
+        return [.. candidates.Where(subject => !candidates.Any(other => Covers(other, subject)))];
+    }
+
+    private static bool Covers(string wildcard, string subject)
+    {
+        if (wildcard == subject || !wildcard.EndsWith(NatsSubjects.Wildcard, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return subject.StartsWith(wildcard[..^NatsSubjects.Wildcard.Length], StringComparison.Ordinal);
     }
 
     private static InvalidOperationException Ambiguous(string route, string first, string second)

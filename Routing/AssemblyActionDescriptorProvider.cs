@@ -70,7 +70,7 @@ internal sealed class AssemblyActionDescriptorProvider(
             descriptors.Add(new NatsActionDescriptor
             {
                 Subject = ResolveSubject(displayName, classSubject, methodSubject, action),
-                ClassSubject = classSubject,
+                ClassSubject = methodSubject ?? classSubject,
                 Action = action,
                 HandlerType = handlerType,
                 MethodInfo = method,

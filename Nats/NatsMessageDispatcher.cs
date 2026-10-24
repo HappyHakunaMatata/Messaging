@@ -37,8 +37,6 @@ internal sealed class NatsMessageDispatcher(
                 endpoint.DisplayName,
                 message.Metadata?.NumDelivered);
 
-            // Not immediate: an immediate NAK is redelivered into this instance's own pull request before its UNSUB
-            // is processed, and that copy is dropped with the subscription. The first backoff step is enough.
             await RedeliverAsync(message, _options.RedeliveryDelay(1));
             return;
         }
@@ -119,8 +117,6 @@ internal sealed class NatsMessageDispatcher(
         await TerminateAsync(message);
     }
 
-    // Acknowledgements deliberately ignore the stop token: once the handler has finished, the ack has to reach
-    // the server even during shutdown, otherwise the message comes back and is processed a second time.
     private async Task AcknowledgeAsync(INatsJSMsg<byte[]> message)
     {
         try
