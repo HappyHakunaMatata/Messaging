@@ -7,7 +7,6 @@ internal sealed class NatsMessageDispatcher(
     IOptions<ConsumerOptions> options,
     IActionDescriptorCollectionProvider descriptorProvider,
     IServiceScopeFactory scopeFactory,
-    IPrincipalFactory principalFactory,
     ILogger<NatsMessageDispatcher> logger)
 {
     private readonly ConsumerOptions _options = options.Value;
@@ -76,7 +75,6 @@ internal sealed class NatsMessageDispatcher(
             message.Data ?? ReadOnlyMemory<byte>.Empty,
             scope.ServiceProvider,
             endpoint.Descriptor,
-            principalFactory,
             cancellationToken);
 
         scope.ServiceProvider.GetRequiredService<NatsContextAccessor>().Context = context;

@@ -2,7 +2,6 @@ using Messaging.Filters;
 using Messaging.Infrastructure;
 using Messaging.Nats;
 using Messaging.Routing;
-using Messaging.Security;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Messaging.DependencyInjection;
@@ -52,7 +51,6 @@ public static class NatsServiceCollectionExtensions
             services.TryAddSingleton<EndpointRouterFactory>();
             services.TryAddSingleton<NatsMessageDispatcher>();
             services.TryAddSingleton<NatsStreamProvisioner>();
-            services.TryAddSingleton<IPrincipalFactory, HeaderPrincipalFactory>();
             services.TryAddSingleton<IActionDescriptorCollectionProvider, DefaultActionDescriptorCollectionProvider>();
             _ = services.AddHostedService<SubscriptionManager>();
 

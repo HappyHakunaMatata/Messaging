@@ -1,6 +1,5 @@
 global using System.Globalization;
 global using System.Reflection;
-global using System.Security.Claims;
 global using Messaging.Abstractions;
 global using Messaging.Options;
 global using Microsoft.Extensions.DependencyInjection;

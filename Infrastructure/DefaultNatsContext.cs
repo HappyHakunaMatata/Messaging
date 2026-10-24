@@ -8,10 +8,8 @@ internal sealed class DefaultNatsContext(
     ReadOnlyMemory<byte> payload,
     IServiceProvider services,
     NatsActionDescriptor actionDescriptor,
-    IPrincipalFactory principalFactory,
     CancellationToken cancellationToken) : NatsContext
 {
-    private ClaimsPrincipal? _user;
     private IDictionary<object, object?>? _items;
 
     public override string Subject { get; } = subject;
@@ -25,8 +23,6 @@ internal sealed class DefaultNatsContext(
     public override NatsActionDescriptor ActionDescriptor { get; } = actionDescriptor;
 
     public override CancellationToken CancellationToken { get; } = cancellationToken;
-
-    public override ClaimsPrincipal User => _user ??= principalFactory.Create(Headers);
 
     public override IDictionary<object, object?> Items => _items ??= new Dictionary<object, object?>();
 

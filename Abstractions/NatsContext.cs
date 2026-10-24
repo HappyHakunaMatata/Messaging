@@ -10,8 +10,6 @@ public abstract class NatsContext
 
     public abstract ReadOnlyMemory<byte> Payload { get; }
 
-    public abstract ClaimsPrincipal User { get; }
-
     public abstract IServiceProvider Services { get; }
 
     public abstract NatsActionDescriptor ActionDescriptor { get; }
