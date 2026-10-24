@@ -46,7 +46,7 @@ public sealed class ConsumerOptions : IValidatableObject
 
     public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
     {
-        if (EffectiveBackoffSeconds.Any(seconds => seconds <= 0))
+        if (!RetryPolicy.IsValidBackoff(EffectiveBackoffSeconds))
         {
             yield return new ValidationResult(
                 $"Every {nameof(BackoffSeconds)} entry must be greater than zero.",
