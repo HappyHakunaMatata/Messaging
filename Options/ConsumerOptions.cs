@@ -66,13 +66,7 @@ public sealed class ConsumerOptions : IValidatableObject
 
     internal TimeSpan ReconnectDelay => TimeSpan.FromSeconds(ReconnectDelaySeconds);
 
-    internal TimeSpan RedeliveryDelay(ulong numDelivered)
-    {
-        int[] backoff = EffectiveBackoffSeconds;
-        int index = (int)Math.Min(Math.Max(numDelivered, 1) - 1, (ulong)(backoff.Length - 1));
-
-        return TimeSpan.FromSeconds(backoff[index]);
-    }
+    internal RetryPolicy DefaultRetry => new() { MaxDeliver = MaxDeliver, BackoffSeconds = EffectiveBackoffSeconds };
 
     internal string QualifiedStreamName => ToName(string.Concat(Prefix, StreamName));
 

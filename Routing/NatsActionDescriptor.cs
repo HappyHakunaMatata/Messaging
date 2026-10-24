@@ -22,5 +22,7 @@ public sealed class NatsActionDescriptor
 
     public required IReadOnlyList<FilterDescriptor> Filters { get; init; }
 
+    public required RetryPolicy Retry { get; init; }
+
     public override string ToString() => DisplayName;
 }

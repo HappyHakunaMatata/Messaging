@@ -36,7 +36,7 @@ internal sealed class NatsMessageDispatcher(
                 endpoint.DisplayName,
                 message.Metadata?.NumDelivered);
 
-            await RedeliverAsync(message, _options.RedeliveryDelay(1));
+            await RedeliverAsync(message, endpoint.Descriptor.Retry.RedeliveryDelay(1));
             return;
         }
         catch (NatsMessageRejectedException rejection)
@@ -85,10 +85,11 @@ internal sealed class NatsMessageDispatcher(
     private async Task FailAsync(INatsJSMsg<byte[]> message, NatsEndpoint endpoint, Exception exception)
     {
         NatsJSMsgMetadata? metadata = message.Metadata;
+        RetryPolicy retry = endpoint.Descriptor.Retry;
 
-        if (metadata is null || metadata.Value.NumDelivered < (ulong)_options.MaxDeliver)
+        if (metadata is null || metadata.Value.NumDelivered < (ulong)retry.MaxDeliver)
         {
-            TimeSpan delay = _options.RedeliveryDelay(metadata?.NumDelivered ?? 1);
+            TimeSpan delay = retry.RedeliveryDelay(metadata?.NumDelivered ?? 1);
 
             logger.LogError(
                 exception,
@@ -109,7 +110,7 @@ internal sealed class NatsMessageDispatcher(
             message.Subject,
             endpoint.DisplayName,
             metadata.Value.NumDelivered,
-            _options.MaxDeliver,
+            retry.MaxDeliver,
             exception.GetType().Name);
 
         await TerminateAsync(message);

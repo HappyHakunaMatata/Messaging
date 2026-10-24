@@ -13,10 +13,14 @@ internal sealed class SubscriptionManager(
     private readonly ConsumerOptions _options = options.Value;
 
     private string[] _subjects = [];
+    private int _maxDeliver;
 
     public override Task StartAsync(CancellationToken cancellationToken)
     {
         _subjects = [.. descriptorProvider.Router.Subjects.Select(_options.QualifySubject)];
+        _maxDeliver = descriptorProvider.Descriptors.Items.Aggregate(
+            _options.MaxDeliver,
+            (max, descriptor) => Math.Max(max, descriptor.Retry.MaxDeliver));
 
         return base.StartAsync(cancellationToken);
     }
@@ -57,7 +61,7 @@ internal sealed class SubscriptionManager(
 
     private async Task SubscribeAsync(string[] subjects, CancellationToken cancellationToken)
     {
-        INatsJSConsumer consumer = await provisioner.BindAsync(subjects, cancellationToken);
+        INatsJSConsumer consumer = await provisioner.BindAsync(subjects, _maxDeliver, cancellationToken);
         NatsJSConsumeOpts consumeOptions = new() { MaxMsgs = _options.PrefetchCount };
 
         await foreach (INatsJSMsg<byte[]> message in consumer.ConsumeAsync<byte[]>(opts: consumeOptions, cancellationToken: cancellationToken))

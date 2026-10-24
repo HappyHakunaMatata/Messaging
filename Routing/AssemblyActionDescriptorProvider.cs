@@ -6,8 +6,11 @@ namespace Messaging.Routing;
 internal sealed class AssemblyActionDescriptorProvider(
     HandlerAssemblyCatalog catalog,
     FilterFactory filterFactory,
+    IOptions<ConsumerOptions> options,
     IServiceProviderIsService? isService = null) : IActionDescriptorProvider
 {
+    private readonly ConsumerOptions _options = options.Value;
+
     public IReadOnlyList<NatsActionDescriptor> GetDescriptors()
     {
         List<NatsActionDescriptor> descriptors = [];
@@ -39,6 +42,7 @@ internal sealed class AssemblyActionDescriptorProvider(
     private void AddDescriptors(Type handlerType, List<NatsActionDescriptor> descriptors)
     {
         string? classSubject = handlerType.GetCustomAttribute<SubjectAttribute>()?.Subject;
+        RetryAttribute? classRetry = handlerType.GetCustomAttribute<RetryAttribute>();
 
         MethodInfo[] methods = handlerType.GetMethods(BindingFlags.Public | BindingFlags.Instance);
 
@@ -77,7 +81,8 @@ internal sealed class AssemblyActionDescriptorProvider(
                 DisplayName = displayName,
                 MessageType = signature.MessageType,
                 Parameters = signature.Parameters,
-                Filters = filterFactory.CreateDescriptors(handlerType, method)
+                Filters = filterFactory.CreateDescriptors(handlerType, method),
+                Retry = ResolveRetry(displayName, classRetry, method.GetCustomAttribute<RetryAttribute>())
             });
         }
     }
@@ -96,6 +101,43 @@ internal sealed class AssemblyActionDescriptorProvider(
         }
 
         return NatsSubjects.Compose(classSubject, action!);
+    }
+
+    private RetryPolicy ResolveRetry(string displayName, RetryAttribute? classRetry, RetryAttribute? methodRetry)
+    {
+        RetryPolicy defaults = _options.DefaultRetry;
+        int maxDeliver = defaults.MaxDeliver;
+        IReadOnlyList<int> backoffSeconds = defaults.BackoffSeconds;
+
+        Apply(displayName, classRetry, ref maxDeliver, ref backoffSeconds);
+        Apply(displayName, methodRetry, ref maxDeliver, ref backoffSeconds);
+
+        return new RetryPolicy { MaxDeliver = maxDeliver, BackoffSeconds = backoffSeconds };
+    }
+
+    private static void Apply(string displayName, RetryAttribute? retry, ref int maxDeliver, ref IReadOnlyList<int> backoffSeconds)
+    {
+        if (retry is null)
+        {
+            return;
+        }
+
+        if (retry.MaxDeliver < 0 || Array.Exists(retry.BackoffSeconds, seconds => seconds <= 0))
+        {
+            throw new InvalidOperationException(
+                $"Handler '{displayName}' declares [{nameof(RetryAttribute)}] with a negative {nameof(RetryAttribute.MaxDeliver)} " +
+                $"or a {nameof(RetryAttribute.BackoffSeconds)} entry that is not greater than zero.");
+        }
+
+        if (retry.MaxDeliver > 0)
+        {
+            maxDeliver = retry.MaxDeliver;
+        }
+
+        if (retry.BackoffSeconds.Length > 0)
+        {
+            backoffSeconds = retry.BackoffSeconds;
+        }
     }
 
     private static void EnsureLiteral(string displayName, string attribute, string? value)

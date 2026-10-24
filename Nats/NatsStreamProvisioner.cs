@@ -6,7 +6,7 @@ internal sealed class NatsStreamProvisioner(
 {
     private readonly ConsumerOptions _options = options.Value;
 
-    public async Task<INatsJSConsumer> BindAsync(IReadOnlyList<string> subjects, CancellationToken cancellationToken)
+    public async Task<INatsJSConsumer> BindAsync(IReadOnlyList<string> subjects, int maxDeliver, CancellationToken cancellationToken)
     {
         INatsJSContext context = connection.Context;
 
@@ -26,7 +26,7 @@ internal sealed class NatsStreamProvisioner(
                 DurableName = _options.QualifiedDurableName,
                 AckPolicy = ConsumerConfigAckPolicy.Explicit,
                 AckWait = _options.AckWait,
-                MaxDeliver = _options.MaxDeliver,
+                MaxDeliver = maxDeliver,
                 FilterSubjects = [.. subjects]
             },
             cancellationToken);
