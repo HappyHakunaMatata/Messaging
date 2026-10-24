@@ -9,6 +9,8 @@ internal sealed class NatsEndpoint
 
     public required Func<IServiceProvider, object> HandlerFactory { get; init; }
 
+    public required Func<object, ValueTask> HandlerReleaser { get; init; }
+
     public required ParameterBinder Binder { get; init; }
 
     public required ActionMethodExecutor Executor { get; init; }

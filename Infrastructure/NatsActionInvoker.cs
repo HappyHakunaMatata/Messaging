@@ -9,10 +9,11 @@ internal sealed class NatsActionInvoker(NatsContext context, NatsEndpoint endpoi
     public async Task InvokeAsync()
     {
         NatsFilterSet filters = endpoint.Filters.GetFilters(context.Services);
+        object? handler = null;
 
         try
         {
-            object handler = endpoint.HandlerFactory(context.Services);
+            handler = endpoint.HandlerFactory(context.Services);
             IDictionary<string, object?> arguments = endpoint.Binder.Bind(context);
 
             NatsExecutionContext execution = new(context, handler, arguments, filters.All);
@@ -26,6 +27,13 @@ internal sealed class NatsActionInvoker(NatsContext context, NatsEndpoint endpoi
             if (await HandleAsync(filters, exception) is { } unhandled)
             {
                 ExceptionDispatchInfo.Capture(unhandled).Throw();
+            }
+        }
+        finally
+        {
+            if (handler is not null)
+            {
+                await endpoint.HandlerReleaser(handler);
             }
         }
     }

@@ -1,4 +1,5 @@
 using Messaging.Routing;
+using Microsoft.Extensions.Hosting;
 
 namespace Messaging.Nats;
 
@@ -7,37 +8,19 @@ internal sealed class SubscriptionManager(
     IActionDescriptorCollectionProvider descriptorProvider,
     NatsStreamProvisioner provisioner,
     NatsMessageDispatcher dispatcher,
-    ILogger<SubscriptionManager> logger) : IDisposable, IAsyncDisposable
+    ILogger<SubscriptionManager> logger) : BackgroundService
 {
     private readonly ConsumerOptions _options = options.Value;
-    private readonly Lock _startGate = new();
 
-    private CancellationTokenSource? _stopping;
-    private Task? _loop;
-
-    public void Start(CancellationToken applicationStopping)
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        lock (_startGate)
-        {
-            if (_loop is not null)
-            {
-                return;
-            }
-
-            _stopping = CancellationTokenSource.CreateLinkedTokenSource(applicationStopping);
-            _loop = Task.Run(() => RunAsync(_stopping.Token), CancellationToken.None);
-        }
-    }
-
-    private async Task RunAsync(CancellationToken cancellationToken)
-    {
-        while (!cancellationToken.IsCancellationRequested)
+        while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
-                await SubscribeAsync(cancellationToken);
+                await SubscribeAsync(stoppingToken);
             }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
                 return;
             }
@@ -48,7 +31,7 @@ internal sealed class SubscriptionManager(
 
             try
             {
-                await Task.Delay(_options.ReconnectDelay, cancellationToken);
+                await Task.Delay(_options.ReconnectDelay, stoppingToken);
             }
             catch (OperationCanceledException)
             {
@@ -76,70 +59,4 @@ internal sealed class SubscriptionManager(
             await dispatcher.DispatchAsync(message, cancellationToken);
         }
     }
-
-    public void Dispose()
-    {
-        var loop = Interlocked.Exchange(ref _loop, null);
-        var stopping = Interlocked.Exchange(ref _stopping, null);
-
-        if (loop is not null)
-        {
-            try
-            {
-                loop.GetAwaiter().GetResult();
-            }
-            catch (Exception ex)
-            {
-                logger.LogError(ex, "An exception occurred while disposing the loop.");
-            }
-            finally
-            {
-                loop.Dispose();
-            }
-        }
-
-        if (stopping is not null)
-        {
-            stopping.Cancel();
-            stopping.Dispose();
-        }
-        GC.SuppressFinalize(this);
-    }
-
-    public async ValueTask DisposeAsync()
-    {
-        var loop = Interlocked.Exchange(ref _loop, null);
-        var stopping = Interlocked.Exchange(ref _stopping, null);
-
-        if (loop is not null)
-        {
-            try
-            {
-                await loop.ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                logger.LogError(ex, "An exception occurred while disposing the loop.");
-            }
-            finally
-            {
-                loop.Dispose();
-            }
-        }
-
-        if (stopping is not null)
-        {
-            try
-            {
-                await stopping.CancelAsync().ConfigureAwait(false);
-            }
-            finally
-            {
-                stopping.Dispose();
-            }
-        }
-        GC.SuppressFinalize(this);
-    }
-     
-
 }

@@ -2,7 +2,7 @@ using NATS.Net;
 
 namespace Messaging.Nats;
 
-internal sealed class NatsConnectionProvider(IOptions<NatsOptions> options) : INatsConnectionProvider, IAsyncDisposable
+internal sealed class NatsConnectionProvider(IOptions<NatsOptions> options) : INatsConnectionProvider, IDisposable, IAsyncDisposable
 {
     private readonly Lock _gate = new();
     private readonly NatsOptions _options = options.Value;
@@ -21,6 +21,8 @@ internal sealed class NatsConnectionProvider(IOptions<NatsOptions> options) : IN
             }
         }
     }
+
+    public void Dispose() => DisposeAsync().AsTask().GetAwaiter().GetResult();
 
     public async ValueTask DisposeAsync()
     {

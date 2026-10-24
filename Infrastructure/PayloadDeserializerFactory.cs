@@ -24,5 +24,19 @@ internal sealed class PayloadDeserializerFactory(IOptions<NatsOptions> options)
     }
 
     private static TMessage? DeserializePayload<TMessage>(ReadOnlyMemory<byte> payload, JsonSerializerOptions serializerOptions)
-        => payload.IsEmpty ? default : JsonSerializer.Deserialize<TMessage>(payload.Span, serializerOptions);
+    {
+        if (payload.IsEmpty)
+        {
+            return default;
+        }
+
+        try
+        {
+            return JsonSerializer.Deserialize<TMessage>(payload.Span, serializerOptions);
+        }
+        catch (JsonException exception)
+        {
+            throw new NatsPayloadException($"The payload could not be deserialized as '{typeof(TMessage)}'.", exception);
+        }
+    }
 }

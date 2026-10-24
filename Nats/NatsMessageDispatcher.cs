@@ -70,7 +70,7 @@ internal sealed class NatsMessageDispatcher(
         INatsJSMsg<byte[]> message,
         CancellationToken cancellationToken)
     {
-        using IServiceScope scope = scopeFactory.CreateScope();
+        await using AsyncServiceScope scope = scopeFactory.CreateAsyncScope();
 
         DefaultNatsContext context = new(
             subject,

@@ -54,7 +54,7 @@ public static class NatsServiceCollectionExtensions
             services.TryAddSingleton<NatsStreamProvisioner>();
             services.TryAddSingleton<IPrincipalFactory, HeaderPrincipalFactory>();
             services.TryAddSingleton<IActionDescriptorCollectionProvider, DefaultActionDescriptorCollectionProvider>();
-            services.TryAddSingleton<SubscriptionManager>();
+            _ = services.AddHostedService<SubscriptionManager>();
 
             services.TryAddEnumerable(ServiceDescriptor.Singleton<IActionDescriptorProvider, AssemblyActionDescriptorProvider>());
             services.TryAddEnumerable(ServiceDescriptor.Singleton<IFilterProvider, DefaultFilterProvider>());
