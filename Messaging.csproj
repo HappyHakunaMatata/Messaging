@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
     <PackageId>HappyHakunaMatata.Messaging</PackageId>
     <PackagePatch Condition="'$(PackagePatch)' == ''">0</PackagePatch>
-    <Version>1.0.$(PackagePatch)</Version>
+    <Version>2.0.$(PackagePatch)</Version>
   </PropertyGroup>
 
   <ItemGroup>
