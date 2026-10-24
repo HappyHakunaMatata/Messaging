@@ -13,7 +13,7 @@ internal sealed class NatsStreamProvisioner(
         _ = await context.CreateOrUpdateStreamAsync(
             new StreamConfig(_options.QualifiedStreamName, [.. subjects])
             {
-                Retention = StreamConfigRetention.Limits,
+                Retention = StreamConfigRetention.Workqueue,
                 DuplicateWindow = _options.DuplicateWindow
             },
             cancellationToken);
