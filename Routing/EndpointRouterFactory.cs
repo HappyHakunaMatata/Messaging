@@ -54,35 +54,7 @@ internal sealed class EndpointRouterFactory(NatsEndpointFactory endpointFactory)
     }
 
     private static string[] CollectSubjects(string[] classSubjects, string[] routedSubjects)
-    {
-        List<string> candidates = new((classSubjects.Length * 2) + routedSubjects.Length);
-
-        for (int index = 0; index < classSubjects.Length; index++)
-        {
-            candidates.Add(classSubjects[index]);
-            candidates.Add(string.Concat(classSubjects[index], NatsSubjects.Separator, NatsSubjects.Wildcard));
-        }
-
-        for (int index = 0; index < routedSubjects.Length; index++)
-        {
-            if (!candidates.Contains(routedSubjects[index]))
-            {
-                candidates.Add(routedSubjects[index]);
-            }
-        }
-
-        return [.. candidates.Where(subject => !candidates.Any(other => Covers(other, subject)))];
-    }
-
-    private static bool Covers(string wildcard, string subject)
-    {
-        if (wildcard == subject || !wildcard.EndsWith(NatsSubjects.Wildcard, StringComparison.Ordinal))
-        {
-            return false;
-        }
-
-        return subject.StartsWith(wildcard[..^NatsSubjects.Wildcard.Length], StringComparison.Ordinal);
-    }
+        => [.. classSubjects.Concat(routedSubjects).Distinct(StringComparer.Ordinal)];
 
     private static InvalidOperationException Ambiguous(string route, string first, string second)
         => new($"Ambiguous route '{route}' is claimed by both '{first}' and '{second}'.");

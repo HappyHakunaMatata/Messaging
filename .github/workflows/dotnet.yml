@@ -13,38 +13,62 @@ jobs:
   build:
 
     runs-on: ubuntu-latest
-    environment: production
-    permissions: 
+    permissions:
       contents: read
-      id-token: write
-      
+
     steps:
     - uses: actions/checkout@v4
     - name: Setup .NET
       uses: actions/setup-dotnet@v4
       with:
         dotnet-version: 10.0.x
-        
+
     - name: Restore dependencies
       run: dotnet restore ./Messaging.csproj
-      
+
     - name: Build
       run: dotnet build ./Messaging.csproj -c Release --no-restore -p:PackagePatch=${{ github.run_number }}
-      
+
     - name: Test
       run: dotnet test ./Messaging.csproj --no-build --verbosity normal
-      
+
     - name: Pack
       run: dotnet pack ./Messaging.csproj -c Release --no-build -o ./packages -p:PackagePatch=${{ github.run_number }}
-      
-    - name: NuGet login 
-      uses: NuGet/login@v1 
-      id: login 
-      with: 
+
+    - name: Upload package
+      uses: actions/upload-artifact@v4
+      with:
+        name: packages
+        path: ./packages/*.nupkg
+
+  publish:
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+    - name: Download package
+      uses: actions/download-artifact@v4
+      with:
+        name: packages
+        path: ./packages
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: 10.0.x
+
+    - name: NuGet login
+      uses: NuGet/login@v1
+      id: login
+      with:
         user: ${{ secrets.NUGET_USER }}
 
     - name: Publish
-      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
       run: |
         dotnet nuget push "./packages/*.nupkg" \
           --api-key "${{ steps.login.outputs.NUGET_API_KEY }}" \

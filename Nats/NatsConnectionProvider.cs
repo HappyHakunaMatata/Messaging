@@ -9,6 +9,7 @@ internal sealed class NatsConnectionProvider(IOptions<NatsOptions> options) : IN
 
     private NatsClient? _client;
     private INatsJSContext? _context;
+    private bool _disposed;
 
     public INatsJSContext Context
     {
@@ -16,7 +17,15 @@ internal sealed class NatsConnectionProvider(IOptions<NatsOptions> options) : IN
         {
             lock (_gate)
             {
-                _client ??= new NatsClient(new NatsOpts { Url = _options.Url, DrainSubscriptionsOnDispose = true });
+                ObjectDisposedException.ThrowIf(_disposed, this);
+
+                _client ??= new NatsClient(new NatsOpts
+                {
+                    Url = _options.Url,
+                    AuthOpts = _options.AuthOpts,
+                    DrainSubscriptionsOnDispose = true
+                });
+
                 return _context ??= _client.CreateJetStreamContext();
             }
         }
@@ -30,6 +39,7 @@ internal sealed class NatsConnectionProvider(IOptions<NatsOptions> options) : IN
 
         lock (_gate)
         {
+            _disposed = true;
             client = _client;
             _client = null;
             _context = null;

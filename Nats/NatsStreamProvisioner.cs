@@ -14,13 +14,7 @@ internal sealed class NatsStreamProvisioner(
     {
         INatsJSContext context = connection.Context;
 
-        _ = await context.CreateOrUpdateStreamAsync(
-            new StreamConfig(_options.QualifiedStreamName, [.. subjects])
-            {
-                Retention = await ResolveRetentionAsync(context, cancellationToken),
-                DuplicateWindow = _options.DuplicateWindow
-            },
-            cancellationToken);
+        await ProvisionStreamAsync(context, subjects, cancellationToken);
 
         return await context.CreateOrUpdateConsumerAsync(
             _options.QualifiedStreamName,
@@ -36,29 +30,48 @@ internal sealed class NatsStreamProvisioner(
             cancellationToken);
     }
 
-    private async Task<StreamConfigRetention> ResolveRetentionAsync(INatsJSContext context, CancellationToken cancellationToken)
+    private async Task ProvisionStreamAsync(INatsJSContext context, IReadOnlyList<string> subjects, CancellationToken cancellationToken)
     {
-        StreamConfigRetention existing;
+        StreamConfig? existing = await FindStreamConfigAsync(context, cancellationToken);
 
-        try
+        if (existing is null)
         {
-            INatsJSStream stream = await context.GetStreamAsync(_options.QualifiedStreamName, cancellationToken: cancellationToken);
-            existing = stream.Info.Config.Retention;
-        }
-        catch (NatsJSApiException exception) when (exception.Error.Code == StreamNotFound)
-        {
-            return Retention;
+            _ = await context.CreateOrUpdateStreamAsync(
+                new StreamConfig(_options.QualifiedStreamName, [.. subjects])
+                {
+                    Retention = Retention,
+                    DuplicateWindow = _options.DuplicateWindow
+                },
+                cancellationToken);
+
+            return;
         }
 
-        if (existing != Retention)
+        if (existing.Retention != Retention)
         {
             logger.LogWarning(
                 "stream_retention_mismatch stream={Stream} retention={Retention} requested={Requested}",
                 _options.QualifiedStreamName,
-                existing,
+                existing.Retention,
                 Retention);
         }
 
-        return existing;
+        existing.Subjects = [.. subjects];
+        existing.DuplicateWindow = _options.DuplicateWindow;
+
+        _ = await context.UpdateStreamAsync(existing, cancellationToken);
+    }
+
+    private async Task<StreamConfig?> FindStreamConfigAsync(INatsJSContext context, CancellationToken cancellationToken)
+    {
+        try
+        {
+            INatsJSStream stream = await context.GetStreamAsync(_options.QualifiedStreamName, cancellationToken: cancellationToken);
+            return stream.Info.Config;
+        }
+        catch (NatsJSApiException exception) when (exception.Error.Code == StreamNotFound)
+        {
+            return null;
+        }
     }
 }

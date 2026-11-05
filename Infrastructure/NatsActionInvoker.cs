@@ -20,6 +20,10 @@ internal sealed class NatsActionInvoker(NatsContext context, NatsEndpoint endpoi
 
             await new FilterPipeline(execution, filters.ActionFilters, ExecuteHandlerAsync).RunAsync();
         }
+        catch (OperationCanceledException) when (context.CancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
         catch (Exception exception)
         {
             context.Exception = exception;

@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using System.Threading.Channels;
 using Messaging.Routing;
 using Microsoft.Extensions.Hosting;
 
@@ -10,6 +12,8 @@ internal sealed class SubscriptionManager(
     NatsMessageDispatcher dispatcher,
     ILogger<SubscriptionManager> logger) : BackgroundService
 {
+    private static readonly UnboundedChannelOptions BatchChannelOptions = new() { SingleReader = true, SingleWriter = true };
+
     private readonly ConsumerOptions _options = options.Value;
 
     private string[] _subjects = [];
@@ -62,11 +66,94 @@ internal sealed class SubscriptionManager(
     private async Task SubscribeAsync(string[] subjects, CancellationToken cancellationToken)
     {
         INatsJSConsumer consumer = await provisioner.BindAsync(subjects, _maxDeliver, cancellationToken);
-        NatsJSConsumeOpts consumeOptions = new() { MaxMsgs = _options.PrefetchCount };
+        NatsJSFetchOpts fetchOptions = new() { MaxMsgs = _options.PrefetchCount };
 
-        await foreach (INatsJSMsg<byte[]> message in consumer.ConsumeAsync<byte[]>(opts: consumeOptions, cancellationToken: cancellationToken))
+        while (!cancellationToken.IsCancellationRequested)
         {
-            await dispatcher.DispatchAsync(message, cancellationToken);
+            await ProcessBatchAsync(consumer, fetchOptions, cancellationToken);
+        }
+    }
+
+    private async Task ProcessBatchAsync(INatsJSConsumer consumer, NatsJSFetchOpts fetchOptions, CancellationToken cancellationToken)
+    {
+        Channel<INatsJSMsg<byte[]>> received = Channel.CreateUnbounded<INatsJSMsg<byte[]>>(BatchChannelOptions);
+        ConcurrentDictionary<INatsJSMsg<byte[]>, bool> unfinished = new(ReferenceEqualityComparer.Instance);
+
+        using CancellationTokenSource batch = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+
+        Task fetch = ReceiveAsync(consumer, fetchOptions, received.Writer, unfinished, batch.Token);
+        Task heartbeat = KeepAliveAsync(unfinished, batch.Token);
+
+        try
+        {
+            await foreach (INatsJSMsg<byte[]> message in received.Reader.ReadAllAsync(cancellationToken))
+            {
+                await dispatcher.DispatchAsync(message, cancellationToken);
+                _ = unfinished.TryRemove(message, out _);
+            }
+        }
+        finally
+        {
+            await batch.CancelAsync();
+            await Task.WhenAll(fetch, heartbeat);
+        }
+    }
+
+    private static async Task ReceiveAsync(
+        INatsJSConsumer consumer,
+        NatsJSFetchOpts fetchOptions,
+        ChannelWriter<INatsJSMsg<byte[]>> writer,
+        ConcurrentDictionary<INatsJSMsg<byte[]>, bool> unfinished,
+        CancellationToken cancellationToken)
+    {
+        Exception? failure = null;
+
+        try
+        {
+            await foreach (INatsJSMsg<byte[]> message in consumer.FetchAsync<byte[]>(fetchOptions, cancellationToken: cancellationToken))
+            {
+                _ = unfinished.TryAdd(message, true);
+                _ = writer.TryWrite(message);
+            }
+        }
+        catch (Exception exception)
+        {
+            failure = exception;
+        }
+        finally
+        {
+            _ = writer.TryComplete(failure);
+        }
+    }
+
+    private async Task KeepAliveAsync(ConcurrentDictionary<INatsJSMsg<byte[]>, bool> unfinished, CancellationToken cancellationToken)
+    {
+        using PeriodicTimer timer = new(_options.AckWait / 2);
+
+        try
+        {
+            while (await timer.WaitForNextTickAsync(cancellationToken))
+            {
+                foreach (INatsJSMsg<byte[]> message in unfinished.Keys)
+                {
+                    await ExtendAsync(message, cancellationToken);
+                }
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+    }
+
+    private async Task ExtendAsync(INatsJSMsg<byte[]> message, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await message.AckProgressAsync(cancellationToken: cancellationToken);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger.LogWarning(exception, "message_progress_failed subject={Subject}", message.Subject);
         }
     }
 }

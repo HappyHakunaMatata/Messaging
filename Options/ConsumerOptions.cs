@@ -6,6 +6,8 @@ public sealed class ConsumerOptions : IValidatableObject
 {
     private const string NameSeparator = "_";
 
+    private const int MaxDuplicateWindowMinutes = (int)(long.MaxValue / 60_000_000_000L);
+
     public const int DefaultMaxDeliver = 5;
 
     public const int DefaultAckWaitSeconds = 30;
@@ -42,6 +44,7 @@ public sealed class ConsumerOptions : IValidatableObject
     [Range(1, int.MaxValue)]
     public int ReconnectDelaySeconds { get; set; } = DefaultReconnectDelaySeconds;
 
+    [Range(1, MaxDuplicateWindowMinutes)]
     public int DuplicateWindowMinutes { get; set; } = DefaultDuplicateWindowMinutes;
 
     public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
