@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using System.Threading.Channels;
 using Messaging.Routing;
 using Microsoft.Extensions.Hosting;
@@ -79,16 +81,28 @@ internal sealed class SubscriptionManager(
         Channel<INatsJSMsg<byte[]>> received = Channel.CreateUnbounded<INatsJSMsg<byte[]>>(BatchChannelOptions);
         ConcurrentDictionary<INatsJSMsg<byte[]>, bool> unfinished = new(ReferenceEqualityComparer.Instance);
 
+        StrongBox<long> dispatchStarted = new();
+
         using CancellationTokenSource batch = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 
         Task fetch = ReceiveAsync(consumer, fetchOptions, received.Writer, unfinished, batch.Token);
-        Task heartbeat = KeepAliveAsync(unfinished, batch.Token);
+        Task heartbeat = KeepAliveAsync(unfinished, dispatchStarted, batch.Token);
 
         try
         {
             await foreach (INatsJSMsg<byte[]> message in received.Reader.ReadAllAsync(cancellationToken))
             {
-                await dispatcher.DispatchAsync(message, cancellationToken);
+                Volatile.Write(ref dispatchStarted.Value, Stopwatch.GetTimestamp());
+
+                try
+                {
+                    await dispatcher.DispatchAsync(message, cancellationToken);
+                }
+                finally
+                {
+                    Volatile.Write(ref dispatchStarted.Value, 0);
+                }
+
                 _ = unfinished.TryRemove(message, out _);
             }
         }
@@ -126,7 +140,10 @@ internal sealed class SubscriptionManager(
         }
     }
 
-    private async Task KeepAliveAsync(ConcurrentDictionary<INatsJSMsg<byte[]>, bool> unfinished, CancellationToken cancellationToken)
+    private async Task KeepAliveAsync(
+        ConcurrentDictionary<INatsJSMsg<byte[]>, bool> unfinished,
+        StrongBox<long> dispatchStarted,
+        CancellationToken cancellationToken)
     {
         using PeriodicTimer timer = new(_options.AckWait / 2);
 
@@ -134,6 +151,18 @@ internal sealed class SubscriptionManager(
         {
             while (await timer.WaitForNextTickAsync(cancellationToken))
             {
+                long started = Volatile.Read(ref dispatchStarted.Value);
+
+                if (started != 0 && Stopwatch.GetElapsedTime(started) > _options.MaxProcessingTime)
+                {
+                    logger.LogWarning(
+                        "message_processing_overdue elapsed={Elapsed} max_processing={MaxProcessing}",
+                        Stopwatch.GetElapsedTime(started),
+                        _options.MaxProcessingTime);
+
+                    continue;
+                }
+
                 foreach (INatsJSMsg<byte[]> message in unfinished.Keys)
                 {
                     await ExtendAsync(message, cancellationToken);

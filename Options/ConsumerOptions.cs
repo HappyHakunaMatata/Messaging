@@ -18,6 +18,8 @@ public sealed class ConsumerOptions : IValidatableObject
 
     public const int DefaultDuplicateWindowMinutes = 2;
 
+    public const int DefaultMaxProcessingSeconds = 300;
+
     public static string SectionName => "Consumers";
 
     public static int[] DefaultBackoffSeconds => [1, 5, 30, 120];
@@ -47,6 +49,9 @@ public sealed class ConsumerOptions : IValidatableObject
     [Range(1, MaxDuplicateWindowMinutes)]
     public int DuplicateWindowMinutes { get; set; } = DefaultDuplicateWindowMinutes;
 
+    [Range(1, int.MaxValue)]
+    public int MaxProcessingSeconds { get; set; } = DefaultMaxProcessingSeconds;
+
     public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
     {
         if (!RetryPolicy.IsValidBackoff(EffectiveBackoffSeconds))
@@ -68,6 +73,8 @@ public sealed class ConsumerOptions : IValidatableObject
     internal TimeSpan DuplicateWindow => TimeSpan.FromMinutes(DuplicateWindowMinutes);
 
     internal TimeSpan ReconnectDelay => TimeSpan.FromSeconds(ReconnectDelaySeconds);
+
+    internal TimeSpan MaxProcessingTime => TimeSpan.FromSeconds(MaxProcessingSeconds);
 
     internal RetryPolicy DefaultRetry => new() { MaxDeliver = MaxDeliver, BackoffSeconds = EffectiveBackoffSeconds };
 
