@@ -1,6 +1,5 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
-using System.Runtime.CompilerServices;
 using System.Threading.Channels;
 using Messaging.Routing;
 using Microsoft.Extensions.Hosting;
@@ -79,20 +78,18 @@ internal sealed class SubscriptionManager(
     private async Task ProcessBatchAsync(INatsJSConsumer consumer, NatsJSFetchOpts fetchOptions, CancellationToken cancellationToken)
     {
         Channel<INatsJSMsg<byte[]>> received = Channel.CreateUnbounded<INatsJSMsg<byte[]>>(BatchChannelOptions);
-        ConcurrentDictionary<INatsJSMsg<byte[]>, bool> unfinished = new(ReferenceEqualityComparer.Instance);
-
-        StrongBox<long> dispatchStarted = new();
+        ConcurrentDictionary<INatsJSMsg<byte[]>, long> unfinished = new(ReferenceEqualityComparer.Instance);
 
         using CancellationTokenSource batch = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 
         Task fetch = ReceiveAsync(consumer, fetchOptions, received.Writer, unfinished, batch.Token);
-        Task heartbeat = KeepAliveAsync(unfinished, dispatchStarted, batch.Token);
+        Task heartbeat = KeepAliveAsync(unfinished, batch.Token);
 
         try
         {
             await foreach (INatsJSMsg<byte[]> message in received.Reader.ReadAllAsync(cancellationToken))
             {
-                Volatile.Write(ref dispatchStarted.Value, Stopwatch.GetTimestamp());
+                unfinished[message] = Stopwatch.GetTimestamp();
 
                 try
                 {
@@ -100,10 +97,8 @@ internal sealed class SubscriptionManager(
                 }
                 finally
                 {
-                    Volatile.Write(ref dispatchStarted.Value, 0);
+                    _ = unfinished.TryRemove(message, out _);
                 }
-
-                _ = unfinished.TryRemove(message, out _);
             }
         }
         finally
@@ -117,7 +112,7 @@ internal sealed class SubscriptionManager(
         INatsJSConsumer consumer,
         NatsJSFetchOpts fetchOptions,
         ChannelWriter<INatsJSMsg<byte[]>> writer,
-        ConcurrentDictionary<INatsJSMsg<byte[]>, bool> unfinished,
+        ConcurrentDictionary<INatsJSMsg<byte[]>, long> unfinished,
         CancellationToken cancellationToken)
     {
         Exception? failure = null;
@@ -126,7 +121,7 @@ internal sealed class SubscriptionManager(
         {
             await foreach (INatsJSMsg<byte[]> message in consumer.FetchAsync<byte[]>(fetchOptions, cancellationToken: cancellationToken))
             {
-                _ = unfinished.TryAdd(message, true);
+                _ = unfinished.TryAdd(message, 0);
                 _ = writer.TryWrite(message);
             }
         }
@@ -141,8 +136,7 @@ internal sealed class SubscriptionManager(
     }
 
     private async Task KeepAliveAsync(
-        ConcurrentDictionary<INatsJSMsg<byte[]>, bool> unfinished,
-        StrongBox<long> dispatchStarted,
+        ConcurrentDictionary<INatsJSMsg<byte[]>, long> unfinished,
         CancellationToken cancellationToken)
     {
         using PeriodicTimer timer = new(_options.AckWait / 2);
@@ -151,20 +145,22 @@ internal sealed class SubscriptionManager(
         {
             while (await timer.WaitForNextTickAsync(cancellationToken))
             {
-                long started = Volatile.Read(ref dispatchStarted.Value);
-
-                if (started != 0 && Stopwatch.GetElapsedTime(started) > _options.MaxProcessingTime)
+                foreach ((INatsJSMsg<byte[]> message, long started) in unfinished)
                 {
-                    logger.LogWarning(
-                        "message_processing_overdue elapsed={Elapsed} max_processing={MaxProcessing}",
-                        Stopwatch.GetElapsedTime(started),
-                        _options.MaxProcessingTime);
+                    TimeSpan elapsed = started == 0 ? TimeSpan.Zero : Stopwatch.GetElapsedTime(started);
 
-                    continue;
-                }
+                    if (elapsed > _options.MaxProcessingTime)
+                    {
+                        logger.LogWarning(
+                            "message_processing_overdue subject={Subject} num_delivered={NumDelivered} elapsed={Elapsed} max_processing={MaxProcessing}",
+                            message.Subject,
+                            message.Metadata?.NumDelivered,
+                            elapsed,
+                            _options.MaxProcessingTime);
 
-                foreach (INatsJSMsg<byte[]> message in unfinished.Keys)
-                {
+                        continue;
+                    }
+
                     await ExtendAsync(message, cancellationToken);
                 }
             }
