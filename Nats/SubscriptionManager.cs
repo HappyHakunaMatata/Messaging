@@ -99,6 +99,22 @@ internal sealed class SubscriptionManager(
         {
             await batch.CancelAsync();
             await Task.WhenAll(fetch, heartbeat);
+            await ReleaseAsync(unfinished, gate);
+        }
+    }
+
+    private async Task ReleaseAsync(ConcurrentDictionary<INatsJSMsg<byte[]>, bool> unfinished, SemaphoreSlim gate)
+    {
+        if (unfinished.IsEmpty)
+        {
+            return;
+        }
+
+        logger.LogInformation("batch_released count={Count}", unfinished.Count);
+
+        foreach (INatsJSMsg<byte[]> message in unfinished.Keys)
+        {
+            await SettleAsync(message, MessageDisposition.Redeliver(TimeSpan.Zero), unfinished, gate);
         }
     }
 

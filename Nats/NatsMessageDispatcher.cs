@@ -33,12 +33,16 @@ internal sealed class NatsMessageDispatcher(
         {
             Abandon(invocation, message, endpoint);
 
-            return Fail(message, endpoint, new TimeoutException($"Handler exceeded {_options.MaxProcessingTime}."));
+            return Fail(message, endpoint, new TimeoutException($"Handler exceeded {_options.MaxProcessingTime}."), _options.MaxProcessingTime);
         }
 
         try
         {
             await invocation;
+        }
+        catch (OperationCanceledException) when (timeout.IsCancellationRequested)
+        {
+            return Fail(message, endpoint, new TimeoutException($"Handler exceeded {_options.MaxProcessingTime}."));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -49,10 +53,6 @@ internal sealed class NatsMessageDispatcher(
                 message.Metadata?.NumDelivered);
 
             return MessageDisposition.Redeliver(endpoint.Descriptor.Retry.RedeliveryDelay(1));
-        }
-        catch (OperationCanceledException) when (timeout.IsCancellationRequested)
-        {
-            return Fail(message, endpoint, new TimeoutException($"Handler exceeded {_options.MaxProcessingTime}."));
         }
         catch (NatsMessageRejectedException rejection)
         {
@@ -110,14 +110,14 @@ internal sealed class NatsMessageDispatcher(
             TaskScheduler.Default);
     }
 
-    private MessageDisposition Fail(INatsJSMsg<byte[]> message, NatsEndpoint endpoint, Exception exception)
+    private MessageDisposition Fail(INatsJSMsg<byte[]> message, NatsEndpoint endpoint, Exception exception, TimeSpan minimumDelay = default)
     {
         NatsJSMsgMetadata? metadata = message.Metadata;
         RetryPolicy retry = endpoint.Descriptor.Retry;
 
         if (metadata is null || metadata.Value.NumDelivered < (ulong)retry.MaxDeliver)
         {
-            TimeSpan delay = retry.RedeliveryDelay(metadata?.NumDelivered ?? 1);
+            TimeSpan delay = TimeSpan.FromTicks(Math.Max(retry.RedeliveryDelay(metadata?.NumDelivered ?? 1).Ticks, minimumDelay.Ticks));
 
             logger.LogError(
                 exception,
