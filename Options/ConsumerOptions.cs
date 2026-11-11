@@ -62,13 +62,6 @@ public sealed class ConsumerOptions : IValidatableObject
                 $"Every {nameof(BackoffSeconds)} entry must be greater than zero.",
                 [nameof(BackoffSeconds)]);
         }
-
-        if (MaxProcessingSeconds <= AckWaitSeconds)
-        {
-            yield return new ValidationResult(
-                $"{nameof(MaxProcessingSeconds)} must be greater than {nameof(AckWaitSeconds)}.",
-                [nameof(MaxProcessingSeconds)]);
-        }
     }
 
     internal static string DefaultStreamName(string applicationName) => ToName(applicationName).ToUpperInvariant();

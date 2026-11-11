@@ -23,13 +23,13 @@ internal sealed class NatsMessageDispatcher(
             return MessageDisposition.Acknowledge;
         }
 
-        using CancellationTokenSource timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(_options.MaxProcessingTime);
+        using CancellationTokenSource timeout = new(_options.MaxProcessingTime);
+        using CancellationTokenSource handlerCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
 
-        Task invocation = InvokeAsync(endpoint, subject, headers, message, timeout.Token);
+        Task invocation = InvokeAsync(endpoint, subject, headers, message, handlerCancellation.Token);
         Task deadline = Task.Delay(Timeout.InfiniteTimeSpan, timeout.Token);
 
-        if (await Task.WhenAny(invocation, deadline) == deadline && !cancellationToken.IsCancellationRequested)
+        if (await Task.WhenAny(invocation, deadline) == deadline && !invocation.IsCompleted)
         {
             Abandon(invocation, message, endpoint);
 
@@ -49,6 +49,10 @@ internal sealed class NatsMessageDispatcher(
                 message.Metadata?.NumDelivered);
 
             return MessageDisposition.Redeliver(endpoint.Descriptor.Retry.RedeliveryDelay(1));
+        }
+        catch (OperationCanceledException) when (timeout.IsCancellationRequested)
+        {
+            return Fail(message, endpoint, new TimeoutException($"Handler exceeded {_options.MaxProcessingTime}."));
         }
         catch (NatsMessageRejectedException rejection)
         {

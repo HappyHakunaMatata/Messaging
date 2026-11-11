@@ -80,9 +80,10 @@ internal sealed class SubscriptionManager(
         ConcurrentDictionary<INatsJSMsg<byte[]>, bool> unfinished = new(ReferenceEqualityComparer.Instance);
 
         using SemaphoreSlim gate = new(1, 1);
-        using CancellationTokenSource batch = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        using CancellationTokenSource batch = new();
+        using CancellationTokenSource fetching = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, batch.Token);
 
-        Task fetch = ReceiveAsync(consumer, fetchOptions, received.Writer, unfinished, batch.Token);
+        Task fetch = ReceiveAsync(consumer, fetchOptions, received.Writer, unfinished, fetching.Token);
         Task heartbeat = KeepAliveAsync(unfinished, gate, batch.Token);
 
         try
