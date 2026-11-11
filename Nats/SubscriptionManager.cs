@@ -97,7 +97,7 @@ internal sealed class SubscriptionManager(
 
                 MessageDisposition disposition = await dispatcher.DispatchAsync(message, cancellationToken);
 
-                await SettleAsync(message, disposition, unfinished, gate);
+                _ = await SettleAsync(message, disposition, unfinished, gate);
             }
         }
         finally
@@ -122,19 +122,19 @@ internal sealed class SubscriptionManager(
             return;
         }
 
-        logger.LogInformation("batch_released count={Count}", unfinished.Count);
+        INatsJSMsg<byte[]>[] pending = [.. unfinished.Keys];
+
+        logger.LogInformation("batch_released count={Count}", pending.Length);
 
         using CancellationTokenSource release = new(_options.ReconnectDelay);
 
-        foreach (INatsJSMsg<byte[]> message in unfinished.Keys)
+        for (int index = 0; index < pending.Length; index++)
         {
-            if (release.IsCancellationRequested)
+            if (!await SettleAsync(pending[index], MessageDisposition.Redeliver(TimeSpan.Zero), unfinished, gate, release.Token))
             {
-                logger.LogWarning("batch_release_timeout remaining={Remaining}", unfinished.Count);
+                logger.LogWarning("batch_release_timeout remaining={Remaining}", pending.Length - index);
                 return;
             }
-
-            await SettleAsync(message, MessageDisposition.Redeliver(TimeSpan.Zero), unfinished, gate, release.Token);
         }
     }
 
@@ -211,14 +211,25 @@ internal sealed class SubscriptionManager(
         }
     }
 
-    private async Task SettleAsync(
+    private async Task<bool> SettleAsync(
         INatsJSMsg<byte[]> message,
         MessageDisposition disposition,
         ConcurrentDictionary<INatsJSMsg<byte[]>, bool> unfinished,
         SemaphoreSlim gate,
         CancellationToken cancellationToken = default)
     {
-        await gate.WaitAsync(CancellationToken.None);
+        using CancellationTokenSource timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(_options.ReconnectDelay);
+
+        try
+        {
+            await gate.WaitAsync(timeout.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            logger.LogWarning("message_settle_timeout subject={Subject} disposition={Disposition}", message.Subject, disposition.Kind);
+            return false;
+        }
 
         try
         {
@@ -227,17 +238,24 @@ internal sealed class SubscriptionManager(
             switch (disposition.Kind)
             {
                 case MessageDispositionKind.Acknowledge:
-                    await message.AckAsync(cancellationToken: cancellationToken);
+                    await message.AckAsync(cancellationToken: timeout.Token);
                     break;
                 case MessageDispositionKind.Redeliver:
                     await message.NakAsync(
                         new AckOpts { NakDelay = disposition.RedeliveryDelay > TimeSpan.Zero ? disposition.RedeliveryDelay : null },
-                        cancellationToken);
+                        timeout.Token);
                     break;
                 case MessageDispositionKind.Terminate:
-                    await message.AckTerminateAsync(cancellationToken: cancellationToken);
+                    await message.AckTerminateAsync(cancellationToken: timeout.Token);
                     break;
             }
+
+            return true;
+        }
+        catch (OperationCanceledException) when (timeout.IsCancellationRequested)
+        {
+            logger.LogWarning("message_settle_timeout subject={Subject} disposition={Disposition}", message.Subject, disposition.Kind);
+            return false;
         }
         catch (Exception exception)
         {
@@ -246,6 +264,7 @@ internal sealed class SubscriptionManager(
                 "message_settle_failed subject={Subject} disposition={Disposition}",
                 message.Subject,
                 disposition.Kind);
+            return true;
         }
         finally
         {

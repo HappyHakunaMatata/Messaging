@@ -52,7 +52,7 @@ internal sealed class NatsMessageDispatcher(
                 endpoint.DisplayName,
                 message.Metadata?.NumDelivered);
 
-            return MessageDisposition.Redeliver(endpoint.Descriptor.Retry.RedeliveryDelay(1));
+            return MessageDisposition.Redeliver(TimeSpan.Zero);
         }
         catch (NatsMessageRejectedException rejection)
         {
