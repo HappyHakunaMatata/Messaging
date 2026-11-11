@@ -11,7 +11,7 @@ internal sealed class NatsMessageDispatcher(
 {
     private readonly ConsumerOptions _options = options.Value;
 
-    public async Task DispatchAsync(INatsJSMsg<byte[]> message, CancellationToken cancellationToken)
+    public async Task<MessageDisposition> DispatchAsync(INatsJSMsg<byte[]> message, CancellationToken cancellationToken)
     {
         string subject = message.Subject[_options.Prefix.Length..];
         IReadOnlyDictionary<string, string> headers = NatsHeaderCollectionFactory.Create(message.Headers);
@@ -20,13 +20,25 @@ internal sealed class NatsMessageDispatcher(
         if (!descriptorProvider.Router.TryMatch(subject, action, out NatsEndpoint? endpoint))
         {
             logger.LogWarning("message_unroutable subject={Subject} action={Action}", subject, action);
-            await AcknowledgeAsync(message);
-            return;
+            return MessageDisposition.Acknowledge;
+        }
+
+        using CancellationTokenSource timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(_options.MaxProcessingTime);
+
+        Task invocation = InvokeAsync(endpoint, subject, headers, message, timeout.Token);
+        Task deadline = Task.Delay(Timeout.InfiniteTimeSpan, timeout.Token);
+
+        if (await Task.WhenAny(invocation, deadline) == deadline && !cancellationToken.IsCancellationRequested)
+        {
+            Abandon(invocation, message, endpoint);
+
+            return Fail(message, endpoint, new TimeoutException($"Handler exceeded {_options.MaxProcessingTime}."));
         }
 
         try
         {
-            await InvokeAsync(endpoint, subject, headers, message, cancellationToken);
+            await invocation;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -36,8 +48,7 @@ internal sealed class NatsMessageDispatcher(
                 endpoint.DisplayName,
                 message.Metadata?.NumDelivered);
 
-            await RedeliverAsync(message, endpoint.Descriptor.Retry.RedeliveryDelay(1));
-            return;
+            return MessageDisposition.Redeliver(endpoint.Descriptor.Retry.RedeliveryDelay(1));
         }
         catch (NatsMessageRejectedException rejection)
         {
@@ -48,16 +59,14 @@ internal sealed class NatsMessageDispatcher(
                 endpoint.DisplayName,
                 rejection.GetType().Name);
 
-            await TerminateAsync(message);
-            return;
+            return MessageDisposition.Terminate;
         }
         catch (Exception exception)
         {
-            await FailAsync(message, endpoint, exception);
-            return;
+            return Fail(message, endpoint, exception);
         }
 
-        await AcknowledgeAsync(message);
+        return MessageDisposition.Acknowledge;
     }
 
     private async Task InvokeAsync(
@@ -82,7 +91,22 @@ internal sealed class NatsMessageDispatcher(
         await NatsActionInvokerFactory.CreateInvoker(context, endpoint).InvokeAsync();
     }
 
-    private async Task FailAsync(INatsJSMsg<byte[]> message, NatsEndpoint endpoint, Exception exception)
+    private void Abandon(Task invocation, INatsJSMsg<byte[]> message, NatsEndpoint endpoint)
+    {
+        _ = invocation.ContinueWith(
+            completed => logger.LogWarning(
+                completed.Exception?.GetBaseException(),
+                "message_handler_overran subject={Subject} handler={Handler} num_delivered={NumDelivered} status={Status}",
+                message.Subject,
+                endpoint.DisplayName,
+                message.Metadata?.NumDelivered,
+                completed.Status),
+            CancellationToken.None,
+            TaskContinuationOptions.NotOnCanceled | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+    }
+
+    private MessageDisposition Fail(INatsJSMsg<byte[]> message, NatsEndpoint endpoint, Exception exception)
     {
         NatsJSMsgMetadata? metadata = message.Metadata;
         RetryPolicy retry = endpoint.Descriptor.Retry;
@@ -100,8 +124,7 @@ internal sealed class NatsMessageDispatcher(
                 delay,
                 exception.GetType().Name);
 
-            await RedeliverAsync(message, delay);
-            return;
+            return MessageDisposition.Redeliver(delay);
         }
 
         logger.LogError(
@@ -113,44 +136,6 @@ internal sealed class NatsMessageDispatcher(
             retry.MaxDeliver,
             exception.GetType().Name);
 
-        await TerminateAsync(message);
-    }
-
-    private async Task AcknowledgeAsync(INatsJSMsg<byte[]> message)
-    {
-        try
-        {
-            await message.AckAsync(cancellationToken: CancellationToken.None);
-        }
-        catch (Exception failure)
-        {
-            logger.LogWarning(failure, "message_ack_failed subject={Subject}", message.Subject);
-        }
-    }
-
-    private async Task RedeliverAsync(INatsJSMsg<byte[]> message, TimeSpan delay)
-    {
-        try
-        {
-            await message.NakAsync(
-                new AckOpts { NakDelay = delay > TimeSpan.Zero ? delay : null },
-                CancellationToken.None);
-        }
-        catch (Exception failure)
-        {
-            logger.LogWarning(failure, "message_nak_failed subject={Subject}", message.Subject);
-        }
-    }
-
-    private async Task TerminateAsync(INatsJSMsg<byte[]> message)
-    {
-        try
-        {
-            await message.AckTerminateAsync(cancellationToken: CancellationToken.None);
-        }
-        catch (Exception failure)
-        {
-            logger.LogWarning(failure, "message_terminate_failed subject={Subject}", message.Subject);
-        }
+        return MessageDisposition.Terminate;
     }
 }

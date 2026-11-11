@@ -8,6 +8,8 @@ public sealed class ConsumerOptions : IValidatableObject
 
     private const int MaxDuplicateWindowMinutes = (int)(long.MaxValue / 60_000_000_000L);
 
+    private const int MaxTimerSeconds = (int)((uint.MaxValue - 1) / 1000);
+
     public const int DefaultMaxDeliver = 5;
 
     public const int DefaultAckWaitSeconds = 30;
@@ -35,7 +37,7 @@ public sealed class ConsumerOptions : IValidatableObject
     [Range(1, int.MaxValue)]
     public int MaxDeliver { get; set; } = DefaultMaxDeliver;
 
-    [Range(1, int.MaxValue)]
+    [Range(1, MaxTimerSeconds)]
     public int AckWaitSeconds { get; set; } = DefaultAckWaitSeconds;
 
     public int[] BackoffSeconds { get; set; } = [];
@@ -43,13 +45,13 @@ public sealed class ConsumerOptions : IValidatableObject
     [Range(1, int.MaxValue)]
     public int PrefetchCount { get; set; } = DefaultPrefetchCount;
 
-    [Range(1, int.MaxValue)]
+    [Range(1, MaxTimerSeconds)]
     public int ReconnectDelaySeconds { get; set; } = DefaultReconnectDelaySeconds;
 
     [Range(1, MaxDuplicateWindowMinutes)]
     public int DuplicateWindowMinutes { get; set; } = DefaultDuplicateWindowMinutes;
 
-    [Range(1, int.MaxValue)]
+    [Range(1, MaxTimerSeconds)]
     public int MaxProcessingSeconds { get; set; } = DefaultMaxProcessingSeconds;
 
     public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)

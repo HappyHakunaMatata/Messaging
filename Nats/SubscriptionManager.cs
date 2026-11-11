@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using System.Diagnostics;
 using System.Threading.Channels;
 using Messaging.Routing;
 using Microsoft.Extensions.Hosting;
@@ -78,27 +77,21 @@ internal sealed class SubscriptionManager(
     private async Task ProcessBatchAsync(INatsJSConsumer consumer, NatsJSFetchOpts fetchOptions, CancellationToken cancellationToken)
     {
         Channel<INatsJSMsg<byte[]>> received = Channel.CreateUnbounded<INatsJSMsg<byte[]>>(BatchChannelOptions);
-        ConcurrentDictionary<INatsJSMsg<byte[]>, long> unfinished = new(ReferenceEqualityComparer.Instance);
+        ConcurrentDictionary<INatsJSMsg<byte[]>, bool> unfinished = new(ReferenceEqualityComparer.Instance);
 
+        using SemaphoreSlim gate = new(1, 1);
         using CancellationTokenSource batch = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 
         Task fetch = ReceiveAsync(consumer, fetchOptions, received.Writer, unfinished, batch.Token);
-        Task heartbeat = KeepAliveAsync(unfinished, batch.Token);
+        Task heartbeat = KeepAliveAsync(unfinished, gate, batch.Token);
 
         try
         {
             await foreach (INatsJSMsg<byte[]> message in received.Reader.ReadAllAsync(cancellationToken))
             {
-                unfinished[message] = Stopwatch.GetTimestamp();
+                MessageDisposition disposition = await dispatcher.DispatchAsync(message, cancellationToken);
 
-                try
-                {
-                    await dispatcher.DispatchAsync(message, cancellationToken);
-                }
-                finally
-                {
-                    _ = unfinished.TryRemove(message, out _);
-                }
+                await SettleAsync(message, disposition, unfinished, gate);
             }
         }
         finally
@@ -112,7 +105,7 @@ internal sealed class SubscriptionManager(
         INatsJSConsumer consumer,
         NatsJSFetchOpts fetchOptions,
         ChannelWriter<INatsJSMsg<byte[]>> writer,
-        ConcurrentDictionary<INatsJSMsg<byte[]>, long> unfinished,
+        ConcurrentDictionary<INatsJSMsg<byte[]>, bool> unfinished,
         CancellationToken cancellationToken)
     {
         Exception? failure = null;
@@ -121,7 +114,7 @@ internal sealed class SubscriptionManager(
         {
             await foreach (INatsJSMsg<byte[]> message in consumer.FetchAsync<byte[]>(fetchOptions, cancellationToken: cancellationToken))
             {
-                _ = unfinished.TryAdd(message, 0);
+                _ = unfinished.TryAdd(message, true);
                 _ = writer.TryWrite(message);
             }
         }
@@ -136,7 +129,8 @@ internal sealed class SubscriptionManager(
     }
 
     private async Task KeepAliveAsync(
-        ConcurrentDictionary<INatsJSMsg<byte[]>, long> unfinished,
+        ConcurrentDictionary<INatsJSMsg<byte[]>, bool> unfinished,
+        SemaphoreSlim gate,
         CancellationToken cancellationToken)
     {
         using PeriodicTimer timer = new(_options.AckWait / 2);
@@ -145,23 +139,21 @@ internal sealed class SubscriptionManager(
         {
             while (await timer.WaitForNextTickAsync(cancellationToken))
             {
-                foreach ((INatsJSMsg<byte[]> message, long started) in unfinished)
+                foreach (INatsJSMsg<byte[]> message in unfinished.Keys)
                 {
-                    TimeSpan elapsed = started == 0 ? TimeSpan.Zero : Stopwatch.GetElapsedTime(started);
+                    await gate.WaitAsync(cancellationToken);
 
-                    if (elapsed > _options.MaxProcessingTime)
+                    try
                     {
-                        logger.LogWarning(
-                            "message_processing_overdue subject={Subject} num_delivered={NumDelivered} elapsed={Elapsed} max_processing={MaxProcessing}",
-                            message.Subject,
-                            message.Metadata?.NumDelivered,
-                            elapsed,
-                            _options.MaxProcessingTime);
-
-                        continue;
+                        if (unfinished.ContainsKey(message))
+                        {
+                            await ExtendAsync(message, cancellationToken);
+                        }
                     }
-
-                    await ExtendAsync(message, cancellationToken);
+                    finally
+                    {
+                        _ = gate.Release();
+                    }
                 }
             }
         }
@@ -179,6 +171,47 @@ internal sealed class SubscriptionManager(
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
             logger.LogWarning(exception, "message_progress_failed subject={Subject}", message.Subject);
+        }
+    }
+
+    private async Task SettleAsync(
+        INatsJSMsg<byte[]> message,
+        MessageDisposition disposition,
+        ConcurrentDictionary<INatsJSMsg<byte[]>, bool> unfinished,
+        SemaphoreSlim gate)
+    {
+        await gate.WaitAsync(CancellationToken.None);
+
+        try
+        {
+            _ = unfinished.TryRemove(message, out _);
+
+            switch (disposition.Kind)
+            {
+                case MessageDispositionKind.Acknowledge:
+                    await message.AckAsync(cancellationToken: CancellationToken.None);
+                    break;
+                case MessageDispositionKind.Redeliver:
+                    await message.NakAsync(
+                        new AckOpts { NakDelay = disposition.RedeliveryDelay > TimeSpan.Zero ? disposition.RedeliveryDelay : null },
+                        CancellationToken.None);
+                    break;
+                case MessageDispositionKind.Terminate:
+                    await message.AckTerminateAsync(cancellationToken: CancellationToken.None);
+                    break;
+            }
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(
+                exception,
+                "message_settle_failed subject={Subject} disposition={Disposition}",
+                message.Subject,
+                disposition.Kind);
+        }
+        finally
+        {
+            _ = gate.Release();
         }
     }
 }
