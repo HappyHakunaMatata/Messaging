@@ -90,6 +90,11 @@ internal sealed class SubscriptionManager(
         {
             await foreach (INatsJSMsg<byte[]> message in received.Reader.ReadAllAsync(cancellationToken))
             {
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    break;
+                }
+
                 MessageDisposition disposition = await dispatcher.DispatchAsync(message, cancellationToken);
 
                 await SettleAsync(message, disposition, unfinished, gate);
@@ -98,8 +103,15 @@ internal sealed class SubscriptionManager(
         finally
         {
             await batch.CancelAsync();
-            await Task.WhenAll(fetch, heartbeat);
-            await ReleaseAsync(unfinished, gate);
+
+            try
+            {
+                await Task.WhenAll(fetch, heartbeat);
+            }
+            finally
+            {
+                await ReleaseAsync(unfinished, gate);
+            }
         }
     }
 
@@ -112,9 +124,17 @@ internal sealed class SubscriptionManager(
 
         logger.LogInformation("batch_released count={Count}", unfinished.Count);
 
+        using CancellationTokenSource release = new(_options.ReconnectDelay);
+
         foreach (INatsJSMsg<byte[]> message in unfinished.Keys)
         {
-            await SettleAsync(message, MessageDisposition.Redeliver(TimeSpan.Zero), unfinished, gate);
+            if (release.IsCancellationRequested)
+            {
+                logger.LogWarning("batch_release_timeout remaining={Remaining}", unfinished.Count);
+                return;
+            }
+
+            await SettleAsync(message, MessageDisposition.Redeliver(TimeSpan.Zero), unfinished, gate, release.Token);
         }
     }
 
@@ -195,7 +215,8 @@ internal sealed class SubscriptionManager(
         INatsJSMsg<byte[]> message,
         MessageDisposition disposition,
         ConcurrentDictionary<INatsJSMsg<byte[]>, bool> unfinished,
-        SemaphoreSlim gate)
+        SemaphoreSlim gate,
+        CancellationToken cancellationToken = default)
     {
         await gate.WaitAsync(CancellationToken.None);
 
@@ -206,15 +227,15 @@ internal sealed class SubscriptionManager(
             switch (disposition.Kind)
             {
                 case MessageDispositionKind.Acknowledge:
-                    await message.AckAsync(cancellationToken: CancellationToken.None);
+                    await message.AckAsync(cancellationToken: cancellationToken);
                     break;
                 case MessageDispositionKind.Redeliver:
                     await message.NakAsync(
                         new AckOpts { NakDelay = disposition.RedeliveryDelay > TimeSpan.Zero ? disposition.RedeliveryDelay : null },
-                        CancellationToken.None);
+                        cancellationToken);
                     break;
                 case MessageDispositionKind.Terminate:
-                    await message.AckTerminateAsync(cancellationToken: CancellationToken.None);
+                    await message.AckTerminateAsync(cancellationToken: cancellationToken);
                     break;
             }
         }
